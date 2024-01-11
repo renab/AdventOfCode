@@ -173,7 +173,7 @@ func ProcessRow(row string, whichMap string, almanac *Almanac) {
 func RecursiveMapLookup(source int, almanac *Almanac, destinationType string) int {
 	curMap := almanac.Maps[destinationType]
 	for _, v := range curMap {
-		if source >= v.sourceStart && source <= v.sourceEnd && v.target != "" {
+		if source >= v.sourceStart && source < v.sourceEnd {
 			if v.target == "" {
 				return source + v.distance
 			}
