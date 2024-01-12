@@ -3,10 +3,8 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"regexp"
-	"runtime/pprof"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,7 +12,10 @@ import (
 	"time"
 )
 
-var directionMap = map[string]string{"soil": "fertilizer", "fertilizer": "water", "water": "light", "light": "temperature", "temperature": "humidity", "humidity": "location", "location": ""}
+var (
+	directionMap = map[string]string{"soil": "fertilizer", "fertilizer": "water", "water": "light", "light": "temperature", "temperature": "humidity", "humidity": "location", "location": ""}
+	BATCH_SIZE   = 1000000
+)
 
 type SeedRange struct {
 	start  int
@@ -44,12 +45,6 @@ type Almanac struct {
 }
 
 func main() {
-	f, err := os.Create("./profile2.prof")
-	if err != nil {
-		log.Fatal(err)
-	}
-	pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
 	if len(os.Args) != 2 {
 		fmt.Println("Usage: go run main.go <filename>")
 		os.Exit(1)
@@ -110,7 +105,9 @@ func main() {
 	p1Start := time.Now()
 	part1Locations := []int{}
 	for _, seed := range almanac.Seeds {
-		part1Locations = append(part1Locations, RecursiveMapLookup(seed, &almanac, "soil"))
+		localSeed := seed
+		RecursiveMapLookup(&localSeed, &almanac, "soil")
+		part1Locations = append(part1Locations, localSeed)
 	}
 	part1LowestLoc := slices.Min(part1Locations)
 	fmt.Println("Part 1 Lowest Location: ", part1LowestLoc, " Calulated in ", time.Since(p1Start))
@@ -132,14 +129,6 @@ func main() {
 	close(sendChan)
 	processorWaitGroup.Wait()
 
-	// Part 2 non-concurrent
-	// part2Locations := []int{}
-	// for _, seedRange := range almanac.SeedRanges {
-	// 	for i := seedRange.start; i < seedRange.start+seedRange.length; i++ {
-	// 		part2Locations = append(part1Locations, RecursiveMapLookup(i, &almanac, "soil"))
-	// 	}
-	// }
-	// result := slices.Min(part2Locations)
 	fmt.Println("Part 2 Lowest Location: ", result, " Calulated in ", time.Since(p2Start))
 }
 
@@ -147,15 +136,23 @@ func ProcessSeeds(line string, almanac *Almanac) {
 	re := regexp.MustCompile(`(\d+)`)
 	seeds := re.FindAllString(line, -1)
 	seedRanges := []SeedRange{}
-	for i, seed := range seeds {
+	for _, seed := range seeds {
 		seedInt, _ := strconv.Atoi(seed)
 		almanac.Seeds = append(almanac.Seeds, seedInt)
-		if i%2 == 0 {
-			seedRanges = append(seedRanges, SeedRange{seedInt, 0})
-		} else {
-			seedRanges[len(seedRanges)-1].length = seedInt
+	}
+	for i := 0; i < len(seeds); i = i + 2 {
+		start, _ := strconv.Atoi(seeds[i])
+		remaining, _ := strconv.Atoi(seeds[i+1])
+		for remaining > BATCH_SIZE {
+			seedRanges = append(seedRanges, SeedRange{start, BATCH_SIZE})
+			remaining = remaining - BATCH_SIZE
+			start = start + BATCH_SIZE
+		}
+		if remaining > 0 {
+			seedRanges = append(seedRanges, SeedRange{start, remaining})
 		}
 	}
+	fmt.Println(seedRanges)
 	almanac.SeedRanges = seedRanges
 }
 
@@ -170,29 +167,31 @@ func ProcessRow(row string, whichMap string, almanac *Almanac) {
 	almanac.Maps[whichMap] = append(almanac.Maps[whichMap], Map{nums[1], nums[1] + nums[2], nums[0] - nums[1], directionMap[whichMap]})
 }
 
-func RecursiveMapLookup(source int, almanac *Almanac, destinationType string) int {
-	curMap := almanac.Maps[destinationType]
-	for _, v := range curMap {
-		if source >= v.sourceStart && source < v.sourceEnd {
-			if v.target == "" {
-				return source + v.distance
+func RecursiveMapLookup(source *int, almanac *Almanac, destinationType string) {
+	for _, v := range almanac.Maps[destinationType] {
+		if *source >= v.sourceStart && *source < v.sourceEnd {
+			*source = *source + v.distance
+			if v.target != "" {
+				RecursiveMapLookup(source, almanac, v.target)
+				return
 			}
-			return RecursiveMapLookup(source+v.distance, almanac, v.target)
 		}
 	}
-	if directionMap[destinationType] == "" {
-		return source
+	if directionMap[destinationType] != "" {
+		RecursiveMapLookup(source, almanac, directionMap[destinationType])
 	}
-	return RecursiveMapLookup(source, almanac, directionMap[destinationType])
 }
 
 func Worker(result chan<- int, seedRange *SeedRange, almanac *Almanac, waitGroup *sync.WaitGroup) {
 	defer waitGroup.Done()
 	results := []int{}
-	for i := seedRange.start; i < seedRange.start+seedRange.length; i++ {
-		results = append(results, RecursiveMapLookup(i, almanac, "soil"))
+	for i := seedRange.start; i <= seedRange.start+seedRange.length; i++ {
+		iterationResult := i
+		RecursiveMapLookup(&iterationResult, almanac, "soil")
+		results = append(results, iterationResult)
 	}
-	result <- slices.Min(results)
+	location := slices.Min(results)
+	result <- location
 }
 
 func ProcessResult(receive <-chan int, result *int, waitGroup *sync.WaitGroup) {
