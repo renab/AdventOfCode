@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/schollz/progressbar/v3"
 )
 
 var (
@@ -35,13 +37,12 @@ type Map struct {
 	sourceStart int
 	sourceEnd   int
 	distance    int
-	target      string
 }
 
 type Almanac struct {
+	Maps       map[string][]Map
 	Seeds      []int
 	SeedRanges []SeedRange
-	Maps       map[string][]Map
 }
 
 func main() {
@@ -57,7 +58,7 @@ func main() {
 	}
 	defer file.Close()
 
-	almanac := Almanac{[]int{}, []SeedRange{}, map[string][]Map{}}
+	almanac := Almanac{Seeds: []int{}, SeedRanges: []SeedRange{}, Maps: map[string][]Map{}}
 	state := ""
 
 	scanner := bufio.NewScanner(file)
@@ -114,6 +115,7 @@ func main() {
 
 	// Part 2
 	p2Start := time.Now()
+	bar := progressbar.Default(int64(len(almanac.SeedRanges))) // CalculateTotalSeeds(&almanac))
 	sendChan := make(chan int, len(almanac.SeedRanges))
 	var workerWaitGroup sync.WaitGroup
 	for _, seedRange := range almanac.SeedRanges {
@@ -124,7 +126,7 @@ func main() {
 	result := -1
 	var processorWaitGroup sync.WaitGroup
 	processorWaitGroup.Add(1)
-	go ProcessResult(sendChan, &result, &processorWaitGroup)
+	go ProcessResult(sendChan, &result, &processorWaitGroup, bar)
 	workerWaitGroup.Wait()
 	close(sendChan)
 	processorWaitGroup.Wait()
@@ -152,7 +154,6 @@ func ProcessSeeds(line string, almanac *Almanac) {
 			seedRanges = append(seedRanges, SeedRange{start, remaining})
 		}
 	}
-	fmt.Println(seedRanges)
 	almanac.SeedRanges = seedRanges
 }
 
@@ -164,20 +165,18 @@ func ProcessRow(row string, whichMap string, almanac *Almanac) {
 		num, _ := strconv.Atoi(entry)
 		nums = append(nums, num)
 	}
-	almanac.Maps[whichMap] = append(almanac.Maps[whichMap], Map{nums[1], nums[1] + nums[2], nums[0] - nums[1], directionMap[whichMap]})
+	almanac.Maps[whichMap] = append(almanac.Maps[whichMap], Map{sourceStart: nums[1], sourceEnd: nums[1] + nums[2], distance: nums[0] - nums[1]})
 }
 
 func RecursiveMapLookup(source *int, almanac *Almanac, destinationType string) {
 	for _, v := range almanac.Maps[destinationType] {
 		if *source >= v.sourceStart && *source < v.sourceEnd {
 			*source = *source + v.distance
-			if v.target != "" {
-				RecursiveMapLookup(source, almanac, v.target)
-				return
-			}
+			RecursiveMapLookup(source, almanac, directionMap[destinationType])
+			return
 		}
 	}
-	if directionMap[destinationType] != "" {
+	if destinationType != "" {
 		RecursiveMapLookup(source, almanac, directionMap[destinationType])
 	}
 }
@@ -190,15 +189,15 @@ func Worker(result chan<- int, seedRange *SeedRange, almanac *Almanac, waitGroup
 		RecursiveMapLookup(&iterationResult, almanac, "soil")
 		results = append(results, iterationResult)
 	}
-	location := slices.Min(results)
-	result <- location
+	result <- slices.Min(results)
 }
 
-func ProcessResult(receive <-chan int, result *int, waitGroup *sync.WaitGroup) {
+func ProcessResult(receive <-chan int, result *int, waitGroup *sync.WaitGroup, bar *progressbar.ProgressBar) {
 	defer waitGroup.Done()
 	locations := []int{}
 	for location := range receive {
 		locations = append(locations, location)
+		bar.Add(1)
 	}
 	*result = slices.Min(locations)
 }
